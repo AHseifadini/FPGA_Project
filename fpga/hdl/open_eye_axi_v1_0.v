@@ -21,7 +21,7 @@
 		// Parameters of Axi Slave Bus Interface dma_i
 		parameter integer C_dma_i_TDATA_WIDTH	= 64,
 
-		// Parameters of Axi Master Bus Interface dma_o
+		// Parameters of Axi Master Bus Interface dma_o 
 		parameter integer C_dma_o_TDATA_WIDTH	= 64,
 		parameter integer C_dma_o_START_COUNT	= 32
 	)

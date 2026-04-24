@@ -1,3 +1,4 @@
+
 # OpenEye
 
 | ![OpenEyeLogo](doc/figures/open_eye_logo.png) | **Open-Source Hardware Accelerator for Efficient Neural Network Inference** |
@@ -244,3 +245,6 @@ make html
 ## Licensing
 
 OpenEye is covered by the Solderpad Hardware License, Version 2.1 (see [LICENSE](LICENSE) for full text).
+=======
+# FPGA_Project
+>>>>>>> 806cddcd925f1880a5ab5d28e5510603037f1e75
