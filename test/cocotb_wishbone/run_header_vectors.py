@@ -111,6 +111,9 @@ def main():
     parser.add_argument("--prepare-only", action="store_true", help="Validate headers and stage vectors without simulation")
     parser.add_argument("--sim", choices=("icarus", "verilator"), default="icarus")
     parser.add_argument("--step-limit", type=int, default=250000)
+    parser.add_argument("--rx-depth", type=int, default=None)
+    parser.add_argument("--trace-rx", action="store_true", help="Trace raw OpenEye output and RX FIFO at every output/stall transition")
+    parser.add_argument("--capture-depth", type=int, default=0, help="Optional burst capture buffer (128 words for the current reference)")
     args = parser.parse_args()
     generated, vectors, _nin, _nout = prepare()
     if args.prepare_only:
@@ -125,6 +128,12 @@ def main():
         "--sim", args.sim,
         "--step-limit", str(args.step_limit),
     ]
+    if args.rx_depth is not None:
+        cmd.extend(["--rx-depth", str(args.rx_depth)])
+    if args.trace_rx:
+        cmd.append("--trace-rx")
+    if args.capture_depth:
+        cmd.extend(["--capture-depth", str(args.capture_depth)])
     print("[RUN] Starting full OpenEye computation via Wishbone", flush=True)
     subprocess.run(cmd, check=True)
 

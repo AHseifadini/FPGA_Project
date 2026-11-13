@@ -24,7 +24,11 @@
 module openeye_wb_openeye_top #(
     parameter integer WB_ADDR_WIDTH = 32,
     parameter integer TX_FIFO_DEPTH = 16,
-    parameter integer RX_FIFO_DEPTH = 128
+    parameter integer RX_FIFO_DEPTH = 128,
+    // Optional output-burst reservoir. Zero = direct original FIFO path.
+    // When enabled, reserve enough space for the entire unstallable OpenEye
+    // DMA output burst; this cannot fix OpenEye internal backpressure timing.
+    parameter integer RX_CAPTURE_DEPTH = 0
 )(
     // -------------------------------------------------
     // Clock and reset
@@ -211,9 +215,67 @@ module openeye_wb_openeye_top #(
     logic        oe_ready_dma_i;
     logic        oe_last_data_o;
 
-    assign oe_ready_dma_i = !rx_full || rx_pop;
+    // -------------------------------------------------------------------
+    // Optional output capture reservoir, upstream of the small CPU RX FIFO.
+    // OpenEye's current PSUM DMA output pipeline can skip a result when
+    // READY toggles low/high; keeping READY high throughout the known burst
+    // avoids that failure without touching any original OpenEye HDL.
+    // This does NOT make unbounded backpressure safe: size capture memory to
+    // the maximum output burst or fix the producer's READY handling.
+    // -------------------------------------------------------------------
+    logic [63:0] rx_ingress_word;
+    logic        oe_output_accept;
+    assign oe_output_accept = oe_enable_dma_o && oe_ready_dma_i;
 
-    assign rx_push = oe_enable_dma_o && oe_ready_dma_i;
+    generate
+        if (RX_CAPTURE_DEPTH > 0) begin : g_rx_capture
+            localparam integer CAP_PTR_WIDTH = (RX_CAPTURE_DEPTH <= 1) ? 1 : $clog2(RX_CAPTURE_DEPTH);
+            localparam integer CAP_COUNT_WIDTH = $clog2(RX_CAPTURE_DEPTH + 1);
+            localparam logic [CAP_COUNT_WIDTH-1:0] CAP_DEPTH_VALUE = RX_CAPTURE_DEPTH;
+
+            logic [63:0] mem [0:RX_CAPTURE_DEPTH-1];
+            logic [CAP_PTR_WIDTH-1:0] wr_ptr;
+            logic [CAP_PTR_WIDTH-1:0] rd_ptr;
+            logic [CAP_COUNT_WIDTH-1:0] count;
+            logic full;
+            logic empty;
+            logic push;
+            logic pop;
+
+            assign full  = (count == CAP_DEPTH_VALUE);
+            assign empty = (count == 0);
+            // Forward to the 4-word CPU FIFO as soon as it has room.
+            assign pop   = !empty && (!rx_full || rx_pop);
+            assign oe_ready_dma_i = !full || pop;
+            assign push = oe_output_accept;
+            assign rx_push = pop;
+            assign rx_ingress_word = mem[rd_ptr];
+
+            always_ff @(posedge wb_clk_i) begin
+                if (wb_rst_i || cmd_clear_all) begin
+                    wr_ptr <= '0;
+                    rd_ptr <= '0;
+                    count  <= '0;
+                end else begin
+                    if (push) begin
+                        mem[wr_ptr] <= oe_data_dma_o;
+                        wr_ptr <= (wr_ptr == RX_CAPTURE_DEPTH - 1) ? '0 : wr_ptr + 1'b1;
+                    end
+                    if (pop)
+                        rd_ptr <= (rd_ptr == RX_CAPTURE_DEPTH - 1) ? '0 : rd_ptr + 1'b1;
+                    case ({push, pop})
+                        2'b10: count <= count + 1'b1;
+                        2'b01: count <= count - 1'b1;
+                        default: count <= count;
+                    endcase
+                end
+            end
+        end else begin : g_rx_direct
+            assign oe_ready_dma_i = !rx_full || rx_pop;
+            assign rx_push = oe_output_accept;
+            assign rx_ingress_word = oe_data_dma_o;
+        end
+    endgenerate
 
     // Present the current FIFO head together with VALID.
     // Advance only on a same-cycle valid/ready handshake.
@@ -357,13 +419,16 @@ module openeye_wb_openeye_top #(
                 // not an RX overflow. The upstream DMA must honor READY.
 
                 if (rx_push) begin
-                    rx_fifo_mem[rx_wr_ptr] <= oe_data_dma_o;
+                    rx_fifo_mem[rx_wr_ptr] <= rx_ingress_word;
                     rx_wr_ptr              <= (rx_wr_ptr == RX_FIFO_DEPTH-1) ? '0 : rx_wr_ptr + 1'b1;
-                    words_recv_count       <= words_recv_count + 1'b1;
+                end
 
-                    if (oe_last_data_o) begin
+                // Count the accepted OpenEye DMA words, whether they enter
+                // the small CPU RX FIFO directly or the capture reservoir.
+                if (oe_output_accept) begin
+                    words_recv_count <= words_recv_count + 1'b1;
+                    if (oe_last_data_o)
                         last_seen_flag <= 1'b1;
-                    end
                 end
 
                 // -------------------------------------------------

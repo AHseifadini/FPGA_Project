@@ -74,6 +74,9 @@ def run_tests():
     parser.add_argument("--generated", type=Path, help="matching generated parameters.vh, regmap_params.vh, dma_storage.v")
     parser.add_argument("--vectors", type=Path, help="matching demo/layer_N_M with input/reference text")
     parser.add_argument("--step-limit", type=int, default=100000)
+    parser.add_argument("--rx-depth", type=int, default=None, help="Override RX FIFO depth (e.g., 4 to reproduce the reported output mismatch)")
+    parser.add_argument("--trace-rx", action="store_true", help="Trace real OpenEye DMA interface and FIFO transactions around backpressure")
+    parser.add_argument("--capture-depth", type=int, default=0, help="Optional OpenEye output burst reservoir; e.g. 128 for the 128-word reference")
     args = parser.parse_args()
     try:
         from cocotb_test.simulator import run
@@ -87,7 +90,19 @@ def run_tests():
     # Large RX FIFO for real vectors prevents output backpressure while diagnosing
     # reference mismatches. Stub and smoke keep the previously verified depth 4.
     parameters = {"TX_FIFO_DEPTH": 4, "RX_FIFO_DEPTH": 256 if args.mode == "real-vectors" else 4}
-    env = {"OE_STEP_LIMIT": str(args.step_limit)}
+    if args.rx_depth is not None:
+        if args.rx_depth < 2 or args.rx_depth > 4096:
+            parser.error("--rx-depth must be between 2 and 4096")
+        parameters["RX_FIFO_DEPTH"] = args.rx_depth
+    if args.capture_depth < 0 or args.capture_depth > 4096:
+        parser.error("--capture-depth must be between 0 and 4096")
+    if args.capture_depth:
+        parameters["RX_CAPTURE_DEPTH"] = args.capture_depth
+    env = {
+        "OE_STEP_LIMIT": str(args.step_limit),
+        "OE_TRACE_RX": "1" if args.trace_rx else "0",
+        "OE_CAPTURE_NO_STALL": "1" if args.capture_depth else "0",
+    }
     if args.mode == "stub":
         sources.append(str(HERE / "openeye_dma_stub.sv"))
         test_module = "test_wb_stub"
@@ -121,7 +136,7 @@ def run_tests():
     # Restrict the regression explicitly; real-smoke must not run real_dma_vectors.
     if test_case is not None:
         env["COCOTB_TEST_FILTER"] = rf"(^|\.){re.escape(test_case)}$"
-    print(f"MODE: {args.mode} | RTL branch: Amir | generated config: {include_dirs or 'stub only'}")
+    print(f"MODE: {args.mode} | RX_FIFO_DEPTH={parameters['RX_FIFO_DEPTH']} | RX_CAPTURE_DEPTH={args.capture_depth} | RTL branch: Amir | generated config: {include_dirs or 'stub only'}")
     run(
         simulator=args.sim,
         verilog_sources=sources,
